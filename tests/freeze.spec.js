@@ -62,48 +62,62 @@ function sendTG(result) {
 }
 
 async function handleOAuthPage(page) {
-    for (let i = 0; i < 5; i++) {
-        let btn;
-        try {
-            btn = await page.waitForSelector('button.primary_a22cb0', { timeout: 8000 });
-        } catch {
-            try { btn = await page.locator('button:has-text("授权")').first().elementHandle(); }
-            catch {
-                try { btn = await page.locator('button:has-text("Authorize")').first().elementHandle(); }
-                catch { break; }
-            }
-        }
-        if (!btn) break;
+    console.log(`  📄 当前 URL: ${page.url()}`);
+    await page.waitForTimeout(3000);
 
-        const text = (await btn.innerText()).trim();
-        console.log(`  🔍 OAuth 按钮: "${text}"`);
+    const selectors = [
+        'button:has-text("Authorize")',
+        'button:has-text("授权")',
+        'button[type="submit"]',
+        'div[class*="footer"] button',
+        'button[class*="primary"]',
+    ];
 
-        if (text.includes('滚动') || text.toLowerCase().includes('scroll')) {
-            await page.evaluate(() => {
-                const s = document.querySelector('[class*="scroller"]')
-                       || document.querySelector('[class*="scrollerBase"]')
-                       || document.querySelector('[class*="content"]');
-                if (s) s.scrollTop = s.scrollHeight;
-                window.scrollTo(0, document.body.scrollHeight);
-            });
-            await page.waitForTimeout(1500);
-            await btn.click();
-            await page.waitForTimeout(1500);
-            continue;
-        }
+    for (let i = 0; i < 8; i++) {
+        console.log(`  🔄 第 ${i + 1} 次尝试，URL: ${page.url()}`);
 
-        if (text.includes('授权') || text.toLowerCase().includes('authorize')) {
-            const disabled = await btn.evaluate(el => el.disabled || el.classList.contains('disabled'));
-            if (disabled) { await page.waitForTimeout(1500); continue; }
-            await btn.click();
-            console.log('  ✅ 已点击授权按钮');
+        if (!page.url().includes('discord.com')) {
+            console.log('  ✅ 已离开 Discord');
             return;
         }
 
-        const disabled = await btn.evaluate(el => el.disabled || el.classList.contains('disabled'));
-        if (!disabled) { await btn.click(); await page.waitForTimeout(1500); }
-        else break;
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        await page.waitForTimeout(500);
+
+        for (const selector of selectors) {
+            try {
+                const btn = page.locator(selector).last();
+                const visible = await btn.isVisible();
+                if (!visible) continue;
+
+                const text = (await btn.innerText()).trim();
+                console.log(`  🔘 找到按钮: "${text}" (${selector})`);
+
+                if (text.includes('取消') || text.toLowerCase().includes('cancel') ||
+                    text.toLowerCase().includes('deny')) continue;
+
+                const disabled = await btn.isDisabled();
+                if (disabled) {
+                    console.log('  ⏳ 按钮 disabled，等待...');
+                    break;
+                }
+
+                await btn.click();
+                console.log(`  ✅ 已点击: "${text}"`);
+                await page.waitForTimeout(2000);
+
+                if (!page.url().includes('discord.com')) {
+                    console.log('  ✅ 授权成功，已跳转');
+                    return;
+                }
+                break;
+            } catch { continue; }
+        }
+
+        await page.waitForTimeout(2000);
     }
+
+    console.log(`  ⚠️ handleOAuthPage 结束，URL: ${page.url()}`);
 }
 
 test('FreezeHost 自动续期', async () => {
@@ -217,21 +231,36 @@ test('FreezeHost 自动续期', async () => {
 
         // ── 续期 ──────────────────────────────────────────────
         console.log('🔍 查找 Manage 按钮...');
-        await page.waitForSelector('a[href*="server-console"]', { state: 'visible', timeout: 30000 });
-        const manageBtn = page.locator('a[href*="server-console"]').first();
-        await manageBtn.scrollIntoViewIfNeeded();
-        await manageBtn.click();
-        console.log('✅ 已点击 Manage');
+        await page.waitForTimeout(3000);
 
-        console.log('⏳ 等待进入 Server Console...');
-        await page.waitForURL(/\/server-console/);
-        console.log(`📄 Server Console: ${page.url()}`);
+        // 用 JS 直接获取链接 href，绕过任何遮罩层
+        const serverUrl = await page.evaluate(() => {
+            const link = document.querySelector('a[href*="server-console"]');
+            return link ? link.href : null;
+        });
 
+        if (!serverUrl) {
+            throw new Error('❌ 未找到 server-console 链接');
+        }
+
+        console.log(`✅ 找到链接：${serverUrl}`);
+        await page.goto(serverUrl, { waitUntil: 'domcontentloaded' });
+        console.log(`✅ 已跳转到 Server Console: ${page.url()}`);
+
+        // ── 点击 RENEW ────────────────────────────────────────
         console.log('🔍 查找 RENEW 按钮...');
-        const renewBtn = page.locator('a#renew-link').first();
-        await renewBtn.waitFor({ state: 'visible', timeout: 30000 });
-        await renewBtn.click();
-        console.log('📤 已点击 RENEW，等待结果...');
+        const renewUrl = await page.evaluate(() => {
+            const link = document.getElementById('renew-link');
+            return link ? link.href : null;
+        });
+
+        if (!renewUrl) {
+            throw new Error('❌ 未找到 renew-link');
+        }
+
+        console.log(`✅ 找到 RENEW 链接：${renewUrl}`);
+        await page.goto(renewUrl, { waitUntil: 'domcontentloaded' });
+        console.log('📤 已跳转 RENEW，等待结果...');
 
         await page.waitForURL(
             url => url.includes('/dashboard') || url.includes('/server-console'),
